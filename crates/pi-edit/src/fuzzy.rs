@@ -1786,43 +1786,39 @@ mod tests {
 		assert!((similarity_non_ascii - expected_non_ascii).abs() < 0.001);
 	}
 
+	/// Complete retained bytes of one pattern: the struct itself plus the heap
+	/// capacity of both owned vectors.
+	fn unit_pattern_retained_bytes(pattern: &UnitPattern) -> usize {
+		std::mem::size_of::<UnitPattern>()
+			+ pattern.units.capacity() * std::mem::size_of::<u16>()
+			+ pattern.masks.capacity() * std::mem::size_of::<(u16, u128)>()
+	}
+
 	#[test]
-	fn unit_pattern_memory_bounded_on_newline_dense_input() {
-		// Test that memory is bounded regardless of pattern count.
-		let newline_dense_input = "line\n".repeat(100); // 100 lines
-		let lines: Vec<&str> = newline_dense_input.lines().collect();
-		let mut normalized = Vec::new();
+	fn unit_pattern_footprint_scales_with_distinct_units() {
+		// A short line must stay well below the 2 KiB-per-pattern dense table the
+		// sparse representation replaced, and cost must track distinct units.
+		let short: Vec<u16> = "|line".encode_utf16().collect();
+		let short_pattern = UnitPattern::new(short.clone());
+		assert_eq!(short_pattern.masks.len(), 5);
+		let short_bytes = unit_pattern_retained_bytes(&short_pattern);
+		assert!(short_bytes < 1024, "short pattern retains {short_bytes} bytes");
 
-		// Simulate pattern creation: each line becomes a pattern
-		let patterns: Vec<UnitPattern> = lines
-			.iter()
-			.map(|line| {
-				normalized.clear();
-				normalized.push(u16::from(b'|'));
-				normalized.extend(line.encode_utf16().collect::<Vec<u16>>());
-				UnitPattern::new(normalized.clone())
-			})
-			.collect();
-
-		assert_eq!(patterns.len(), 100);
-
-		// Verify memory is bounded: each pattern has few masks
-		for pattern in &patterns {
-			// "line" has 4 ASCII chars + 1 pipe = 5 unique units max
-			assert!(pattern.masks.len() <= 10);
-		}
-
-		// Verify savings: with old approach, each pattern had 2048 bytes (128 * u128)
-		let new_overhead: usize = patterns.len() * std::mem::size_of::<Vec<(u16, u128)>>();
-		let masks_bytes: usize = patterns.iter().map(|p| p.masks.len() * 16).sum();
-		let new_total = new_overhead + masks_bytes;
-		let old_total = patterns.len() * 2048; // Each pattern had [u128; 128]
-
+		// A 128-unit pattern with every unit distinct is the worst case the
+		// bit-vector path admits; it must still be bounded by its unit count.
+		let wide: Vec<u16> = (0..128u16).map(|unit| 0x100 + unit).collect();
+		let wide_pattern = UnitPattern::new(wide);
+		assert_eq!(wide_pattern.masks.len(), 128);
+		let wide_bytes = unit_pattern_retained_bytes(&wide_pattern);
+		let per_unit = std::mem::size_of::<(u16, u128)>() + std::mem::size_of::<u16>();
 		assert!(
-			new_total < old_total,
-			"Memory usage should be bounded: {} < {}",
-			new_total,
-			old_total
+			wide_bytes <= std::mem::size_of::<UnitPattern>() + 128 * per_unit + 64,
+			"wide pattern retains {wide_bytes} bytes"
 		);
+		assert!(short_bytes < wide_bytes, "footprint must grow with distinct units");
+
+		// Patterns longer than 128 units use the row DP and keep no masks.
+		let long: Vec<u16> = vec![u16::from(b'x'); 200];
+		assert!(UnitPattern::new(long).masks.is_empty());
 	}
 }
