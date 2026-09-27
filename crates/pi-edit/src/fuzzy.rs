@@ -428,9 +428,9 @@ fn write_normalized_line(out: &mut Vec<u16>, line: &PreparedLine, depth: Option<
 /// Bit-parallel (Myers/Hyyrö) Levenshtein distance against a fixed pattern of
 /// at most 128 UTF-16 units; longer patterns use the row DP.
 struct UnitPattern {
-	units: Vec<u16>,
-	masks: Vec<(u16, u128)>,
-	high_bit: u128,
+	units:       Vec<u16>,
+	masks:       Vec<(u16, u128)>,
+	high_bit:    u128,
 	active_bits: u128,
 }
 
@@ -459,7 +459,8 @@ impl UnitPattern {
 	}
 
 	fn mask(&self, unit: u16) -> u128 {
-		self.masks
+		self
+			.masks
 			.binary_search_by_key(&unit, |entry| entry.0)
 			.map_or(0, |index| self.masks[index].1)
 	}
@@ -1752,8 +1753,7 @@ mod tests {
 		// Test with non-ASCII characters: emoji and accented characters
 		let pattern_non_ascii = "cafe ☺";
 		let text_non_ascii = "cafe ☻";
-		let pattern_non_ascii_utf16: Vec<u16> =
-			pattern_non_ascii.encode_utf16().collect();
+		let pattern_non_ascii_utf16: Vec<u16> = pattern_non_ascii.encode_utf16().collect();
 		let text_non_ascii_utf16: Vec<u16> = text_non_ascii.encode_utf16().collect();
 
 		let pattern_non_ascii_obj = UnitPattern::new(pattern_non_ascii_utf16.clone());
