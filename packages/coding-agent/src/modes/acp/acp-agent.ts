@@ -1691,13 +1691,14 @@ export class AcpAgent implements Agent {
 	readonly #pendingDeleteLocators = new Map<string, { cwd: string; path: string }>();
 	readonly #pendingCloseIdempotencyKeys = new Map<string, string>();
 	readonly #sessionEpochs = new Map<string, number>();
-	readonly #tearingDown = new Map<string, number>();
-	readonly #lifecycleOperations = new Map<string, Promise<void>>();
+	#tearingDown = new Map<string, number>();
+	#lifecycleOperations = new Map<string, Promise<void>>();
 	#clientCapabilities: ClientCapabilities | undefined;
 	#broker: Promise<BrokerConnection> | undefined;
 	readonly #startupOptions: AcpStartupOptions | undefined;
 	readonly #cancelSettlementGraceMs: number;
 	readonly #promptWatchdogClock: PromptWatchdogClock;
+	readonly #delayModelSettlementForTest: number | undefined;
 	#disposed = false;
 	#disposePromise: Promise<void> | undefined;
 
@@ -1709,6 +1710,8 @@ export class AcpAgent implements Agent {
 					startupOptions?: AcpStartupOptions;
 					cancelSettlementGraceMs?: number;
 					promptWatchdogClock?: PromptWatchdogClock;
+					/** Test hook: delay model settlement by this many milliseconds (for regression testing issue #6009) */
+					delayModelSettlementForTest?: number;
 			  }
 			| unknown,
 	) {
@@ -1755,6 +1758,8 @@ export class AcpAgent implements Agent {
 				? candidate.cancelSettlementGraceMs
 				: CANCEL_SETTLEMENT_GRACE_MS;
 		this.#promptWatchdogClock = parsePromptWatchdogClock(candidate?.promptWatchdogClock) ?? systemPromptWatchdogClock;
+		this.#delayModelSettlementForTest =
+			typeof candidate?.delayModelSettlementForTest === "number" ? candidate.delayModelSettlementForTest : undefined;
 		queueMicrotask(() => {
 			if (connection.signal.aborted) {
 				this.#beginDispose();
@@ -5107,6 +5112,12 @@ export class AcpAgent implements Agent {
 
 		// If an explicit --model was passed, it's already settled by applyAcpStartupOptions.
 		if (this.#startupOptions?.modelId) return;
+
+		// Test hook: delay model settlement to simulate SDK applying default asynchronously.
+		// This is used for regression testing issue #6009.
+		if (this.#delayModelSettlementForTest !== undefined) {
+			await Bun.sleep(this.#delayModelSettlementForTest);
+		}
 
 		// Query the config once to check if the model is already settled.
 		let config = await record.adapter.query("config.list/get");
