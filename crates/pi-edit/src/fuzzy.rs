@@ -428,29 +428,26 @@ fn write_normalized_line(out: &mut Vec<u16>, line: &PreparedLine, depth: Option<
 /// Bit-parallel (Myers/Hyyrö) Levenshtein distance against a fixed pattern of
 /// at most 128 UTF-16 units; longer patterns use the row DP.
 struct UnitPattern {
-	units:       Vec<u16>,
-	ascii_masks: [u128; 128],
-	other_masks: Vec<(u16, u128)>,
-	high_bit:    u128,
+	units: Vec<u16>,
+	masks: Vec<(u16, u128)>,
+	high_bit: u128,
 	active_bits: u128,
 }
 
 impl UnitPattern {
 	fn new(units: Vec<u16>) -> Self {
-		let mut ascii_masks = [0u128; 128];
-		let mut other_masks: Vec<(u16, u128)> = Vec::new();
+		let mut masks: Vec<(u16, u128)> = Vec::new();
 		let len = units.len();
 		if len <= 128 {
 			for (index, &unit) in units.iter().enumerate() {
 				let bit = 1u128 << index;
-				if unit < 128 {
-					ascii_masks[unit as usize] |= bit;
-				} else if let Some(entry) = other_masks.iter_mut().find(|entry| entry.0 == unit) {
+				if let Some(entry) = masks.iter_mut().find(|entry| entry.0 == unit) {
 					entry.1 |= bit;
 				} else {
-					other_masks.push((unit, bit));
+					masks.push((unit, bit));
 				}
 			}
+			masks.sort_unstable_by_key(|entry| entry.0);
 		}
 		// Patterns longer than 128 units never use the bit vectors (row DP).
 		let (high_bit, active_bits) = match len {
@@ -458,19 +455,13 @@ impl UnitPattern {
 			128 => (1u128 << 127, u128::MAX),
 			_ => (0, 0),
 		};
-		Self { units, ascii_masks, other_masks, high_bit, active_bits }
+		Self { units, masks, high_bit, active_bits }
 	}
 
 	fn mask(&self, unit: u16) -> u128 {
-		if unit < 128 {
-			self.ascii_masks[unit as usize]
-		} else {
-			self
-				.other_masks
-				.iter()
-				.find(|entry| entry.0 == unit)
-				.map_or(0, |entry| entry.1)
-		}
+		self.masks
+			.binary_search_by_key(&unit, |entry| entry.0)
+			.map_or(0, |index| self.masks[index].1)
 	}
 
 	fn distance(&self, text: &[u16]) -> usize {
@@ -1740,6 +1731,76 @@ mod tests {
 				.unwrap_err()
 				.to_string(),
 			"oldText must not be empty."
+		);
+	}
+
+	#[test]
+	fn unit_pattern_score_parity_mixed_ascii_non_ascii() {
+		// Test that UTF-16 scoring is identical for mixed ASCII and non-ASCII patterns.
+		let pattern_ascii = "hello world";
+		let text_ascii = "hello warld"; // One character different
+		let pattern_utf16: Vec<u16> = pattern_ascii.encode_utf16().collect();
+		let text_utf16: Vec<u16> = text_ascii.encode_utf16().collect();
+
+		let pattern = UnitPattern::new(pattern_utf16);
+		let similarity = pattern.similarity(&text_utf16);
+
+		// Both strings are 11 UTF-16 units long, 1 difference = 10/11 similarity
+		let expected = 10.0 / 11.0;
+		assert!((similarity - expected).abs() < 0.001);
+
+		// Test with non-ASCII characters: emoji and accented characters
+		let pattern_non_ascii = "cafe ☺";
+		let text_non_ascii = "cafe ☻";
+		let pattern_non_ascii_utf16: Vec<u16> =
+			pattern_non_ascii.encode_utf16().collect();
+		let text_non_ascii_utf16: Vec<u16> = text_non_ascii.encode_utf16().collect();
+
+		let pattern_non_ascii_obj = UnitPattern::new(pattern_non_ascii_utf16.clone());
+		let similarity_non_ascii = pattern_non_ascii_obj.similarity(&text_non_ascii_utf16);
+
+		// Both are 6 UTF-16 units (cafe = 5, emoji = 1 each), 1 different emoji
+		let expected_non_ascii = 5.0 / 6.0;
+		assert!((similarity_non_ascii - expected_non_ascii).abs() < 0.001);
+	}
+
+	#[test]
+	fn unit_pattern_memory_bounded_on_newline_dense_input() {
+		// Test that memory is bounded regardless of pattern count.
+		let newline_dense_input = "line\n".repeat(100); // 100 lines
+		let lines: Vec<&str> = newline_dense_input.lines().collect();
+		let mut normalized = Vec::new();
+
+		// Simulate pattern creation: each line becomes a pattern
+		let patterns: Vec<UnitPattern> = lines
+			.iter()
+			.map(|line| {
+				normalized.clear();
+				normalized.push(u16::from(b'|'));
+				normalized.extend(line.encode_utf16().collect::<Vec<u16>>());
+				UnitPattern::new(normalized.clone())
+			})
+			.collect();
+
+		assert_eq!(patterns.len(), 100);
+
+		// Verify memory is bounded: each pattern has few masks
+		for pattern in &patterns {
+			// "line" has 4 ASCII chars + 1 pipe = 5 unique units max
+			assert!(pattern.masks.len() <= 10);
+		}
+
+		// Verify savings: with old approach, each pattern had 2048 bytes (128 * u128)
+		let new_overhead: usize = patterns.len() * std::mem::size_of::<Vec<(u16, u128)>>();
+		let masks_bytes: usize = patterns.iter().map(|p| p.masks.len() * 16).sum();
+		let new_total = new_overhead + masks_bytes;
+		let old_total = patterns.len() * 2048; // Each pattern had [u128; 128]
+
+		assert!(
+			new_total < old_total,
+			"Memory usage should be bounded: {} < {}",
+			new_total,
+			old_total
 		);
 	}
 }
