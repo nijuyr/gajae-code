@@ -427,9 +427,16 @@ fn write_normalized_line(out: &mut Vec<u16>, line: &PreparedLine, depth: Option<
 
 /// Bit-parallel (Myers/Hyyrö) Levenshtein distance against a fixed pattern of
 /// at most 128 UTF-16 units; longer patterns use the row DP.
+///
+/// Masks are stored only for units that occur (sorted, so non-ASCII lookups
+/// binary-search). ASCII lookups, the hot case for source text, go through a
+/// 128-byte slot index into `masks` so the inner loop stays branch-light while
+/// per-pattern memory stays proportional to the pattern.
 struct UnitPattern {
 	units:       Vec<u16>,
 	masks:       Vec<(u16, u128)>,
+	/// `ascii_slot[unit]` is `index + 1` into `masks`, or 0 when absent.
+	ascii_slot:  [u8; 128],
 	high_bit:    u128,
 	active_bits: u128,
 }
@@ -449,20 +456,35 @@ impl UnitPattern {
 			}
 			masks.sort_unstable_by_key(|entry| entry.0);
 		}
+		// At most 128 distinct units fit a <=128-unit pattern, so `index + 1`
+		// always fits in a u8.
+		let mut ascii_slot = [0u8; 128];
+		for (index, &(unit, _)) in masks.iter().enumerate() {
+			if unit < 128 {
+				ascii_slot[unit as usize] = (index + 1) as u8;
+			}
+		}
 		// Patterns longer than 128 units never use the bit vectors (row DP).
 		let (high_bit, active_bits) = match len {
 			1..=127 => (1u128 << (len - 1), (1u128 << len) - 1),
 			128 => (1u128 << 127, u128::MAX),
 			_ => (0, 0),
 		};
-		Self { units, masks, high_bit, active_bits }
+		Self { units, masks, ascii_slot, high_bit, active_bits }
 	}
 
 	fn mask(&self, unit: u16) -> u128 {
-		self
-			.masks
-			.binary_search_by_key(&unit, |entry| entry.0)
-			.map_or(0, |index| self.masks[index].1)
+		if unit < 128 {
+			match self.ascii_slot[unit as usize] {
+				0 => 0,
+				slot => self.masks[usize::from(slot) - 1].1,
+			}
+		} else {
+			self
+				.masks
+				.binary_search_by_key(&unit, |entry| entry.0)
+				.map_or(0, |index| self.masks[index].1)
+		}
 	}
 
 	fn distance(&self, text: &[u16]) -> usize {
