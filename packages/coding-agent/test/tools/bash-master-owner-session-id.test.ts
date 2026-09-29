@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as piNatives from "@gajae-code/natives";
 import { disposeAllShellSessions, setShellFactoryForTests } from "../../src/exec/bash-executor";
 import type { ToolSession } from "../../src/tools";
-import { BashTool } from "../../src/tools/bash";
+import { BashTool, MANAGED_OWNER_BASH_ENV } from "../../src/tools/bash";
 import { stubBashExecutorSettings } from "../helpers/tool-session-settings";
 
 afterEach(async () => {
@@ -79,6 +79,8 @@ const coordinatorOnlyEnvNames = [
 	"GJC_COORDINATOR_SIDECAR_KEY_ID",
 ];
 
+const expectedUnsetEnvNames = [...coordinatorOnlyEnvNames, ...MANAGED_OWNER_BASH_ENV];
+
 describe("issue #5374: session identity on the bash tool-env path", () => {
 	it("a master-owned child exposes its own id in GJC_SESSION_ID", async () => {
 		const result = await new BashTool(createSession("child-session", "master-owner")).execute("call", {
@@ -110,8 +112,9 @@ describe("issue #5802: coordinator env isolation at the bash boundary", () => {
 		process.env.GJC_SESSION_ID = "parent-session";
 
 		try {
+			const allUnsetEnvNames = [...coordinatorOnlyEnvNames, ...MANAGED_OWNER_BASH_ENV];
 			const command = [
-				`for name in ${coordinatorOnlyEnvNames.join(" ")}; do`,
+				`for name in ${allUnsetEnvNames.join(" ")}; do`,
 				`  value=$(printenv "$name" 2>/dev/null || printf '<unset>')`,
 				`  printf '%s=%s\\n' "$name" "$value"`,
 				"done",
@@ -126,10 +129,12 @@ describe("issue #5802: coordinator env isolation at the bash boundary", () => {
 				},
 			});
 			const output = textOf(result);
-			for (const name of coordinatorOnlyEnvNames) {
-				expect(output).toContain(
-					`${name}=${name === "GJC_COORDINATOR_SESSION_ID" ? "explicit-coordinator-id" : "<unset>"}`,
-				);
+			for (const name of [...coordinatorOnlyEnvNames, ...MANAGED_OWNER_BASH_ENV]) {
+				if (name === "GJC_COORDINATOR_SESSION_ID") {
+					expect(output).toContain(`${name}=explicit-coordinator-id`);
+				} else if (coordinatorOnlyEnvNames.includes(name)) {
+					expect(output).toContain(`${name}=<unset>`);
+				}
 			}
 			expect(output).toContain("GJC_SESSION_ID=child-session");
 			expect(output).toContain("BASH_TOOL_EXPLICIT=explicit-tool-value");
@@ -239,7 +244,7 @@ describe("issue #5802: coordinator env isolation at the bash boundary", () => {
 			// nightly-2026-08-12 no longer creates for a leaf library crate.
 			await fs.access(path.join(fixtureDir, "target", "debug", "libbash_minimizer_fixture.rlib"));
 			expect(nativeCommand).toBe(command);
-			expect(nativeUnsetEnv).toEqual(coordinatorOnlyEnvNames);
+			expect(nativeUnsetEnv).toEqual(expectedUnsetEnvNames);
 			expect(nativeMinimizer).toEqual({
 				enabled: true,
 				settingsPath: undefined,

@@ -11,26 +11,26 @@ import { type BashArtifactSaveResult, type BashResult, executeBash } from "../ex
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { buildGjcRuntimeSessionEnv } from "../gjc-runtime/goal-mode-request";
 import {
-	GJC_RALPLAN_ARTIFACT_ENV,
-	GJC_RESTRICTED_ROLE_AGENT_BASH_ENV,
-} from "../gjc-runtime/restricted-role-agent-bash";
-import {
-	MANAGED_OWNER_PREDECESSOR_TOKEN_ENV,
 	MANAGED_OWNER_PREDECESSOR_GENERATION_ENV,
-	MANAGED_OWNER_PREDECESSOR_RUN_ID_ENV,
 	MANAGED_OWNER_PREDECESSOR_INCARNATION_ENV,
+	MANAGED_OWNER_PREDECESSOR_RUN_ID_ENV,
+	MANAGED_OWNER_PREDECESSOR_TOKEN_ENV,
 	MANAGED_OWNER_TRANSCRIPT_PATH_ENV,
 } from "../gjc-runtime/managed-owner-admission";
 import {
 	MANAGED_OWNER_CHILD_TOKEN_ENV,
 	MANAGED_OWNER_COMMAND_ENV,
-	MANAGED_OWNER_SESSION_ID_ENV,
 	MANAGED_OWNER_GENERATION_ENV,
-	MANAGED_OWNER_STATE_DIR_ENV,
-	MANAGED_OWNER_RUN_ID_ENV,
 	MANAGED_OWNER_INCARNATION_ENV,
 	MANAGED_OWNER_REDACT_COMMAND_ENV,
+	MANAGED_OWNER_RUN_ID_ENV,
+	MANAGED_OWNER_SESSION_ID_ENV,
+	MANAGED_OWNER_STATE_DIR_ENV,
 } from "../gjc-runtime/managed-owner-supervisor";
+import {
+	GJC_RALPLAN_ARTIFACT_ENV,
+	GJC_RESTRICTED_ROLE_AGENT_BASH_ENV,
+} from "../gjc-runtime/restricted-role-agent-bash";
 import { InternalUrlRouter } from "../internal-urls";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { highlightCode, type Theme } from "../modes/theme/theme";
@@ -126,7 +126,7 @@ const COORDINATOR_ONLY_BASH_ENV = [
  * This prevents nested gjc from inheriting partial managed-owner metadata that
  * would trigger managed_owner_admission_metadata_invalid.
  */
-const MANAGED_OWNER_BASH_ENV = [
+export const MANAGED_OWNER_BASH_ENV = [
 	MANAGED_OWNER_CHILD_TOKEN_ENV,
 	MANAGED_OWNER_COMMAND_ENV,
 	MANAGED_OWNER_SESSION_ID_ENV,
@@ -1530,10 +1530,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			...(this.session.bashRestrictionProfile === "read-only" ? READ_ONLY_BASH_ENV : {}),
 			...(allowedPrefixes && allowedPrefixes.length > 0 ? { [GJC_RESTRICTED_ROLE_AGENT_BASH_ENV]: "1" } : {}),
 		};
-		const unsetEnv = [
-			...COORDINATOR_ONLY_BASH_ENV,
-			...MANAGED_OWNER_BASH_ENV,
-		].filter(name => !Object.hasOwn(expandedEnv ?? {}, name));
+		const unsetEnv = [...COORDINATOR_ONLY_BASH_ENV, ...MANAGED_OWNER_BASH_ENV].filter(
+			name => !Object.hasOwn(expandedEnv ?? {}, name),
+		);
 
 		if (cwd?.includes("://") || cwd?.includes("local:/")) {
 			cwd = await expandInternalUrls(cwd, { ...internalUrlOptions, noEscape: true });
