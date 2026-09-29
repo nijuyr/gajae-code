@@ -1026,6 +1026,71 @@ describe("executeBash", () => {
 		}
 	});
 
+	it("unsets all managed-owner env vars to allow nested admission to return fresh (issue #6139)", async () => {
+		const previousRun = process.env.GJC_MANAGED_OWNER_RUN_ID;
+		const previousIncarnation = process.env.GJC_MANAGED_OWNER_INCARNATION;
+		const previousToken = process.env.GJC_MANAGED_OWNER_CHILD_TOKEN;
+		const previousStateDir = process.env.GJC_TMUX_OWNER_STATE_DIR;
+		const previousGeneration = process.env.GJC_TMUX_OWNER_GENERATION;
+		const previousPredecessorToken = process.env.GJC_MANAGED_OWNER_PREDECESSOR_TOKEN;
+		const previousRedactCmd = process.env.GJC_MANAGED_OWNER_REDACT_COMMAND;
+
+		// Set managed-owner env vars to simulate nested environment
+		process.env.GJC_MANAGED_OWNER_RUN_ID = "test-run-id";
+		process.env.GJC_MANAGED_OWNER_INCARNATION = "test-incarnation";
+		process.env.GJC_MANAGED_OWNER_CHILD_TOKEN = "test-token";
+		process.env.GJC_TMUX_OWNER_STATE_DIR = "/test/state";
+		process.env.GJC_TMUX_OWNER_GENERATION = "test-gen";
+		process.env.GJC_MANAGED_OWNER_PREDECESSOR_TOKEN = "test-pred-token";
+		process.env.GJC_MANAGED_OWNER_REDACT_COMMAND = "1";
+
+		try {
+			await disposeAllShellSessions();
+			// Explicitly unset managed-owner vars like the bash tool does
+			const unsetEnv = [
+				"GJC_MANAGED_OWNER_CHILD_TOKEN",
+				"GJC_MANAGED_OWNER_COMMAND_JSON",
+				"GJC_COORDINATOR_SESSION_ID",
+				"GJC_TMUX_OWNER_GENERATION",
+				"GJC_TMUX_OWNER_STATE_DIR",
+				"GJC_MANAGED_OWNER_RUN_ID",
+				"GJC_MANAGED_OWNER_INCARNATION",
+				"GJC_MANAGED_OWNER_REDACT_COMMAND",
+				"GJC_MANAGED_OWNER_PREDECESSOR_TOKEN",
+				"GJC_MANAGED_OWNER_PREDECESSOR_GENERATION",
+				"GJC_MANAGED_OWNER_PREDECESSOR_RUN_ID",
+				"GJC_MANAGED_OWNER_PREDECESSOR_INCARNATION",
+			];
+			const result = await executeBash(
+				'printf "%s|%s|%s|%s|%s|%s|%s" "$(printenv GJC_MANAGED_OWNER_RUN_ID || printf unset)" "$(printenv GJC_MANAGED_OWNER_INCARNATION || printf unset)" "$(printenv GJC_MANAGED_OWNER_CHILD_TOKEN || printf unset)" "$(printenv GJC_TMUX_OWNER_STATE_DIR || printf unset)" "$(printenv GJC_TMUX_OWNER_GENERATION || printf unset)" "$(printenv GJC_MANAGED_OWNER_PREDECESSOR_TOKEN || printf unset)" "$(printenv GJC_MANAGED_OWNER_REDACT_COMMAND || printf unset)"',
+				{
+					cwd: tempDir,
+					timeout: 5000,
+					sessionKey: "managed-owner-unset-test",
+					unsetEnv,
+				},
+			);
+			expect(result.output).toBe("unset|unset|unset|unset|unset|unset|unset");
+		} finally {
+			// Restore previous env
+			if (previousRun === undefined) delete process.env.GJC_MANAGED_OWNER_RUN_ID;
+			else process.env.GJC_MANAGED_OWNER_RUN_ID = previousRun;
+			if (previousIncarnation === undefined) delete process.env.GJC_MANAGED_OWNER_INCARNATION;
+			else process.env.GJC_MANAGED_OWNER_INCARNATION = previousIncarnation;
+			if (previousToken === undefined) delete process.env.GJC_MANAGED_OWNER_CHILD_TOKEN;
+			else process.env.GJC_MANAGED_OWNER_CHILD_TOKEN = previousToken;
+			if (previousStateDir === undefined) delete process.env.GJC_TMUX_OWNER_STATE_DIR;
+			else process.env.GJC_TMUX_OWNER_STATE_DIR = previousStateDir;
+			if (previousGeneration === undefined) delete process.env.GJC_TMUX_OWNER_GENERATION;
+			else process.env.GJC_TMUX_OWNER_GENERATION = previousGeneration;
+			if (previousPredecessorToken === undefined) delete process.env.GJC_MANAGED_OWNER_PREDECESSOR_TOKEN;
+			else process.env.GJC_MANAGED_OWNER_PREDECESSOR_TOKEN = previousPredecessorToken;
+			if (previousRedactCmd === undefined) delete process.env.GJC_MANAGED_OWNER_REDACT_COMMAND;
+			else process.env.GJC_MANAGED_OWNER_REDACT_COMMAND = previousRedactCmd;
+			await disposeAllShellSessions();
+		}
+	});
+
 	it("retains then fully disposes persistent shell sessions (MEM-7)", async () => {
 		await disposeAllShellSessions();
 		expect(getShellSessionCount()).toBe(0);
