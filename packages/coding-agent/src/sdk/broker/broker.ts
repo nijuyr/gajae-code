@@ -5169,23 +5169,47 @@ export class Broker {
 					identity,
 				});
 			} else if (persistenceVerification.kind === "uncertain") {
-				logger.warn("sdk broker terminal persistence verification found conflicting evidence", {
-					identity,
-					mismatches: persistenceVerification.mismatches,
+				// When verification fails for a terminal_uncertain response, preserve the original
+				// response message rather than replacing it with a generic one. This is especially
+				// important when recovery has stamped a row as terminal_uncertain, as the lifecycle
+				// resolution message should take precedence over the generic verification error.
+				const isTerminalUncertainResponse =
+					!response.ok && typeof response.error === "object" && response.error.code === "terminal_uncertain";
+				if (isTerminalUncertainResponse) {
+					logger.warn("sdk broker terminal persistence verification found conflicting evidence for terminal_uncertain", {
+						identity,
+						mismatches: persistenceVerification.mismatches,
+					});
+					// Preserve the response message from the lifecycle handler, which may contain
+					// important diagnostic information about why the startup failed.
+					await this.ledger.transition(identity, "terminal_uncertain", {
+						response: storedResponse,
+						responseDigest: createHash("sha256").update(canonicalJson(storedResponse)).digest("hex"),
+						...(outcome.durableEffects ? { durableEffects: outcome.durableEffects } : {}),
+						...(outcome.startupFailure ? { startupFailure: outcome.startupFailure } : {}),
 				});
-				const uncertain = error(
-					"terminal_uncertain",
-					"Lifecycle terminal evidence could not be verified after persistence; retained artifacts require reconciliation.",
-				);
-				await this.ledger.transition(identity, "terminal_uncertain", {
-					response: uncertain,
-					responseDigest: createHash("sha256").update(canonicalJson(uncertain)).digest("hex"),
-					...(outcome.durableEffects ? { durableEffects: outcome.durableEffects } : {}),
-					...(outcome.startupFailure ? { startupFailure: outcome.startupFailure } : {}),
-				});
-				return uncertain;
+				return response;
 			}
-			terminalPersistenceHooksForTest.get(this)?.();
+			logger.warn("sdk broker terminal persistence verification found conflicting evidence", {
+				identity,
+				mismatches: persistenceVerification.mismatches,
+				persistedState: (persisted as any).entry?.state,
+				persistedResponseCode: (persisted as any).entry?.response?.error?.code,
+				storedResponseCode: (response as any).error?.code,
+			});
+			const uncertain = error(
+				"terminal_uncertain",
+				"Lifecycle terminal evidence could not be verified after persistence; retained artifacts require reconciliation.",
+			);
+			await this.ledger.transition(identity, "terminal_uncertain", {
+				response: uncertain,
+				responseDigest: createHash("sha256").update(canonicalJson(uncertain)).digest("hex"),
+				...(outcome.durableEffects ? { durableEffects: outcome.durableEffects } : {}),
+				...(outcome.startupFailure ? { startupFailure: outcome.startupFailure } : {}),
+			});
+			return uncertain;
+		}
+		terminalPersistenceHooksForTest.get(this)?.()
 			await outcome.deferredArtifactCleanup?.();
 			return response;
 		} finally {

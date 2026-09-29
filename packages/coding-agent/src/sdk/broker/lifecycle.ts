@@ -6987,7 +6987,15 @@ async function executeLifecycleResponse(
 											knownSecrets,
 										)
 									: undefined;
-				const ledgerUncertain = broker.ledger.get(identity)?.state === "terminal_uncertain";
+				// Check if the ledger row was stamped terminal_uncertain by concurrent recovery.
+				// The broker's in-memory cache may be stale if recovery opened the ledger after this
+				// lifecycle began, so we also check the file directly when the cache doesn't show uncertain.
+				const cached = broker.ledger.get(identity);
+				let ledgerUncertain = cached?.state === "terminal_uncertain";
+				// If cache doesn't show uncertain, read from file to check if recovery stamped it
+				const checkFileForUncertain = (!ledgerUncertain && cached?.requestHash)
+					? broker.ledger.readTerminal(identity, cached.requestHash)
+					: Promise.resolve(undefined);
 				const terminated = await terminateSpawnedChild(
 					child,
 					broker,
@@ -6999,20 +7007,33 @@ async function executeLifecycleResponse(
 					timing,
 					readiness.kind === "timeout",
 				);
-				if (!terminated)
-					return readiness.kind === "ready_probe_failed"
-						? fail(
-								"endpoint_unreadable",
-								`Session ${launch.id} exited, and its readiness could not be determined: ${describeReadyProbeFailure(readiness.probe)}; cleanup could not be proven. ${diagnostic ?? "stage=readiness waiting_for=session_ready child=uncertain exit=not_observed signal=not_observed stderr=none"}`,
-							)
-						: fail(
-								"terminal_uncertain",
-								`Session ${launch.id} did not become ready and its spawned process could not be verified dead. ${diagnostic ?? "stage=readiness waiting_for=session_ready child=uncertain exit=not_observed signal=not_observed stderr=none"}`,
-							);
-				if (ledgerUncertain)
-					return fail(
-						"terminal_uncertain",
-						`Lifecycle startup cleanup could not be proven; retained artifacts require reconciliation. Original launch failure: Session ${launch.id} did not become ready and its spawned process could not be verified dead.`,
+			if (!ledgerUncertain) {
+				const fileTerminal = await checkFileForUncertain;
+				// The recovery may have stamped the row as terminal_uncertain. Accept both
+				// successful terminal reads and rejected reads that indicate corruption/uncertainty.
+				if (fileTerminal?.kind === "terminal" && fileTerminal.entry.state === "terminal_uncertain") {
+					ledgerUncertain = true;
+				} else if (fileTerminal?.kind === "rejected") {
+					// A rejected read indicates there's damaged state or an invalid history.
+					// This counts as evidence of uncertainty that should be reported to the caller.
+					ledgerUncertain = true;
+				}
+			}
+			if (ledgerUncertain) {
+				return fail(
+					"terminal_uncertain",
+					`Lifecycle startup cleanup could not be proven; retained artifacts require reconciliation. Original launch failure: Session ${launch.id} did not become ready and its spawned process could not be verified dead. ${diagnostic ?? "stage=readiness waiting_for=session_ready child=uncertain exit=not_observed signal=not_observed stderr=none"}`,
+			);
+		}
+			if (!terminated)
+				return readiness.kind === "ready_probe_failed"
+					? fail(
+							"endpoint_unreadable",
+							`Session ${launch.id} exited, and its readiness could not be determined: ${describeReadyProbeFailure(readiness.probe)}; cleanup could not be proven. ${diagnostic ?? "stage=readiness waiting_for=session_ready child=uncertain exit=not_observed signal=not_observed stderr=none"}`,
+						)
+					: fail(
+							"terminal_uncertain",
+							`Session ${launch.id} did not become ready and its spawned process could not be verified dead. ${diagnostic ?? "stage=readiness waiting_for=session_ready child=uncertain exit=not_observed signal=not_observed stderr=none"}`,
 					);
 				return readiness.kind === "startup_failed"
 					? fail(
@@ -8350,15 +8371,21 @@ export async function executeLifecycle(
 									...(durableEffects ? { durableEffects } : {}),
 									...(startupFailure ? { startupFailure } : {}),
 								}
-							: startupFailure && cleanupProof
-								? {
-										ok: false,
-										error: startupFailure.code
-											? {
-													code: startupFailure.code,
-													message: startupFailure.message,
-													details: startupFailure.details!,
-													endpoint: "unavailable" as const,
+					: response.error.code === "terminal_uncertain"
+						? {
+								...response,
+								...(durableEffects ? { durableEffects } : {}),
+								...(startupFailure ? { startupFailure } : {}),
+							}
+						: startupFailure && cleanupProof
+							? {
+											ok: false,
+											error: startupFailure.code
+												? {
+														code: startupFailure.code,
+														message: startupFailure.message,
+														details: startupFailure.details!,
+														endpoint: "unavailable" as const,
 												}
 											: {
 													code: "spawn_failed",
@@ -8370,15 +8397,21 @@ export async function executeLifecycle(
 									}
 								: provenDeadCleanup && response.error.code !== "terminal_uncertain"
 									? response
-									: {
-											ok: false,
-											error: {
-												code: "terminal_uncertain",
-												message: terminalUncertainStartupMessage(response),
-											},
-											...(durableEffects ? { durableEffects } : {}),
-											...(startupFailure ? { startupFailure } : {}),
-										}
+									: response.error.code === "terminal_uncertain"
+										? {
+												...response,
+												...(durableEffects ? { durableEffects } : {}),
+												...(startupFailure ? { startupFailure } : {}),
+											}
+										: {
+												ok: false,
+												error: {
+													code: "terminal_uncertain",
+													message: terminalUncertainStartupMessage(response),
+												},
+												...(durableEffects ? { durableEffects } : {}),
+												...(startupFailure ? { startupFailure } : {}),
+											}
 			: response;
 	return {
 		response: terminalResponse,
