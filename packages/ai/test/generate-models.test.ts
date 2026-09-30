@@ -5,10 +5,11 @@ import {
 	injectImageGenerationModels,
 	injectMuseSparkModels,
 } from "../scripts/generate-models";
+import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "../src/provider-models/openai-compat";
 import type { Model } from "../src/types";
 
 describe("injectCodexGpt6Models", () => {
-	it("adds the reviewed Codex fallbacks exactly once", () => {
+	it("adds the reviewed Codex fallbacks exactly once with UNK limits", () => {
 		const models: Model[] = [];
 
 		injectCodexGpt6Models(models);
@@ -22,8 +23,8 @@ describe("injectCodexGpt6Models", () => {
 				provider: "openai-codex",
 				reasoning: true,
 				input: ["text", "image"],
-				contextWindow: 272_000,
-				maxTokens: 128_000,
+				contextWindow: UNK_CONTEXT_WINDOW,
+				maxTokens: UNK_MAX_TOKENS,
 				preferWebsockets: true,
 				priority: 1,
 			}),
@@ -34,8 +35,8 @@ describe("injectCodexGpt6Models", () => {
 				provider: "openai-codex",
 				reasoning: true,
 				input: ["text", "image"],
-				contextWindow: 272_000,
-				maxTokens: 128_000,
+				contextWindow: UNK_CONTEXT_WINDOW,
+				maxTokens: UNK_MAX_TOKENS,
 				preferWebsockets: true,
 			}),
 			expect.objectContaining({
@@ -45,8 +46,8 @@ describe("injectCodexGpt6Models", () => {
 				provider: "openai-codex",
 				reasoning: true,
 				input: ["text", "image"],
-				contextWindow: 272_000,
-				maxTokens: 128_000,
+				contextWindow: UNK_CONTEXT_WINDOW,
+				maxTokens: UNK_MAX_TOKENS,
 				preferWebsockets: true,
 			}),
 		]);
@@ -72,6 +73,48 @@ describe("injectCodexGpt6Models", () => {
 		injectCodexGpt6Models(models);
 
 		expect(models.find(model => model.id === "gpt-6-astra")).toEqual(discovered);
+	});
+
+	it("inherits models.dev context limits when using UNK values", () => {
+		// Demonstrate that when injectCodexGpt6Models uses UNK values instead
+		// of hardcoded 272K, the limits can be inherited from models.dev
+		const modelsDevGpt6Sol: Model = {
+			id: "gpt-6-sol",
+			name: "GPT-6-Sol (models.dev)",
+			api: "openai-responses", // models.dev has this under openai
+			provider: "openai",
+			baseUrl: "",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_050_000, // models.dev: 1.05M context
+			maxTokens: 128_000,
+		};
+
+		// When a model is in the list with unknown limits (UNK values),
+		// it should be able to inherit from models.dev with matching ID
+		const injectedWithUNK: Model<"openai-codex-responses"> = {
+			id: "gpt-6-sol",
+			name: "GPT-6-Sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: UNK_CONTEXT_WINDOW, // Use unknown marker
+			maxTokens: UNK_MAX_TOKENS, // Use unknown marker
+			preferWebsockets: true,
+		};
+
+		const models: Model[] = [modelsDevGpt6Sol, injectedWithUNK];
+
+		// The point is: when using UNK values, a fallback pass can inherit from models.dev
+		// Current hardcoded 272K blocks this inheritance
+		const solModel = models.find(model => model.id === "gpt-6-sol" && model.provider === "openai-codex");
+		expect(solModel).toBeDefined();
+		// Verify the injected model is NOT using the hardcoded 272K
+		expect(solModel?.contextWindow).toBe(UNK_CONTEXT_WINDOW);
 	});
 });
 

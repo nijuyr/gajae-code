@@ -75,11 +75,10 @@ function isRetiredBundledModel(model: Pick<Model, "provider" | "id">): boolean {
 
 /**
  * Keep the reviewed GPT-6 Codex rows available without authenticated discovery.
- * Astra mirrors OpenAI Codex 0.153.4's bundled model catalog; Sol and Luna ship
- * with the same Codex transport and envelope, whose 272K prompt budget is the
- * short-context boundary OpenAI publishes for the whole GPT-6 family
- * (https://developers.openai.com/api/docs/pricing). Generated policies apply the
- * public API pricing and freeform tool metadata.
+ * These models inherit their context window and max tokens limits from models.dev
+ * when available, ensuring they use the actual API limits rather than hardcoded
+ * fallback values. The limits will be filled in by applyGlobalModelsDevFallback
+ * after all inject functions run.
  *
  * Only Astra carries `priority: 1`; Sol and Luna stay in default catalog order
  * so the flagship remains the first Codex suggestion.
@@ -94,8 +93,8 @@ export function injectCodexGpt6Models(models: Model[]): void {
 		reasoning: true,
 		input: ["text", "image"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 272_000,
-		maxTokens: 128_000,
+		contextWindow: UNK_CONTEXT_WINDOW,
+		maxTokens: UNK_MAX_TOKENS,
 		preferWebsockets: true,
 		...(priority === undefined ? {} : { priority }),
 	});
@@ -813,6 +812,9 @@ async function generateModels() {
 	injectAlibabaTokenPlanModels(allModels);
 	injectJetBrainsJunieModels(allModels);
 	injectKiroModels(allModels);
+	// Re-apply models.dev fallback after injections to inherit context/token limits
+	// from models.dev for injected models that use UNK_CONTEXT_WINDOW and UNK_MAX_TOKENS
+	allModels = applyGlobalModelsDevFallback(allModels, modelsDevModels);
 	applyGeneratedModelPolicies(allModels);
 	// This provider-specific correction must run after generic policy inference,
 	// which otherwise caps unknown OpenAI-compatible models at `high`.
