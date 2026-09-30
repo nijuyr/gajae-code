@@ -58,7 +58,8 @@ describe("Kiro CodeWhisperer OAuth endpoint #6002", () => {
 		// Verify the endpoint uses the correct hostname
 		expect(capturedUrl).toBe("https://codewhisperer.us-east-1.amazonaws.com/");
 		expect(capturedHeaders?.authorization).toBe("Bearer oauth-bearer-token");
-		expect(capturedHeaders?.["amzn-x-amz-target"]).toBe("AmazonCodeWhispererService.GenerateAssistantResponse");
+		expect(capturedHeaders?.["x-amz-target"]).toBe("AmazonCodeWhispererStreamingService.GenerateAssistantResponse");
+		expect(capturedHeaders?.["content-type"]).toBe("application/x-amz-json-1.0");
 	});
 
 	test("respects custom region parameter", async () => {
