@@ -36,7 +36,8 @@ test("the production SDK host suites run sequentially and stop after a failure",
 		active -= 1;
 		return suite.file === sdkProductionHostIsolatedSuites[0].file ? 0 : 17;
 	});
-	expect(started).toEqual(sdkProductionHostIsolatedSuites.map(suite => suite.file));
+	expect(sdkProductionHostIsolatedSuites.length).toBeGreaterThan(2);
+	expect(started).toEqual(sdkProductionHostIsolatedSuites.slice(0, 2).map(suite => suite.file));
 	expect(maxActive).toBe(1);
 	expect(exitCode).toBe(17);
 });
@@ -1565,6 +1566,10 @@ test("tab-worker graph changes always include install-methods and are Darwin rel
 	test("prompt-deadline-lease changes select the production deadline manager suite", () => {
 		const tasks = targeted(["packages/coding-agent/src/sdk/prompt-deadline-lease.ts"]);
 		expect(tasks.map(task => task.key)).toContain("test:packages/coding-agent/test/sdk-prompt-deadline-manager.test.ts");
+	});
+	test("broker lifecycle changes select the lifecycle e2e suite", () => {
+		const tasks = targeted(["packages/coding-agent/src/sdk/broker/lifecycle.ts"]);
+		expect(tasks.map(task => task.key)).toContain("test:packages/coding-agent/test/sdk-broker-lifecycle-e2e.test.ts");
 	});
 	test("agent-session source changes select the promotion and concurrency suites", () => {
 		const tasks = targeted(["packages/coding-agent/src/session/agent-session.ts"]);

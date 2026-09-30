@@ -7,6 +7,7 @@ export const sdkProductionHostIsolatedSuites = [
 		pattern: "routes Slack safe queries through the production Session SDK host",
 	},
 	{ file: "test/sdk-prompt-terminal-diagnostics.test.ts", pattern: "SDK host" },
+	{ file: "test/sdk-correlated-frame-delivery.test.ts", pattern: "oversized correlated snapshots still reach a prompt terminal" },
 ] as const;
 
 type IsolatedSuite = (typeof sdkProductionHostIsolatedSuites)[number];
