@@ -12389,9 +12389,9 @@ export class AgentSession {
 		let continuationSdkRunToken: string | undefined;
 		try {
 			const volatileProjectContextMessage = await this.#buildVolatileProjectContextMessage();
-			this.agent.appendMessage(volatileProjectContextMessage);
+			this.#injectOrReplaceVolatileProjectContext(volatileProjectContextMessage);
 			const untrustedMcpServerInstructionsMessage = this.#buildUntrustedMcpServerInstructionsMessage();
-			if (untrustedMcpServerInstructionsMessage) this.agent.appendMessage(untrustedMcpServerInstructionsMessage);
+			if (untrustedMcpServerInstructionsMessage) this.#injectOrReplaceUntrustedMcpServerInstructions(untrustedMcpServerInstructionsMessage);
 			const hindsightState = this.getHindsightSessionState();
 			await hindsightState?.maybeRecallOnAgentStart();
 			hindsightRecall = hindsightState?.getRecallSnippetForInjection();
@@ -12429,7 +12429,6 @@ export class AgentSession {
 			});
 			if (continuationSdkRunToken === undefined) await this.#waitForPostPromptRecovery();
 		} finally {
-			this.#removeEphemeralCustomMessages();
 			await this.#settleEndedInFlight(
 				inFlightPrompt,
 				continuationSdkRunToken === undefined ? "full" : "publication",
@@ -13293,10 +13292,64 @@ export class AgentSession {
 		);
 	}
 
+	/**
+	 * Remove stale ephemeral custom messages, but keep volatile-project-context and
+	 * untrusted-mcp-server-instructions which should persist across turns for prompt
+	 * cache consistency.
+	 */
 	#removeEphemeralCustomMessages(): void {
 		const messages = this.agent.state.messages;
-		const withoutEphemeralMessages = this.#withoutEphemeralCustomMessages(messages);
-		if (withoutEphemeralMessages.length !== messages.length) this.agent.replaceMessages(withoutEphemeralMessages);
+		const withoutStalEphemeral = messages.filter(message => {
+			if (message.role !== "custom") return true;
+			// Keep volatile context and MCP instructions - they're replaced in place on each turn
+			if (message.customType === "volatile-project-context" || message.customType === "untrusted-mcp-server-instructions") {
+				return true;
+			}
+			// Remove other ephemeral message types
+			if (this.#isEphemeralCustomMessageType(message.customType)) return false;
+			return true;
+		});
+		if (withoutStalEphemeral.length !== messages.length) this.agent.replaceMessages(withoutStalEphemeral);
+	}
+
+	/**
+	 * Find and replace an existing volatile-project-context message, or append if none exists.
+	 * This keeps the message at a stable position in the history for prompt cache consistency.
+	 */
+	#injectOrReplaceVolatileProjectContext(volatileMessage: CustomMessage): void {
+		const messages = this.agent.state.messages;
+		const existingIndex = messages.findIndex(
+			message => message.role === "custom" && message.customType === "volatile-project-context",
+		);
+		if (existingIndex !== -1) {
+			// Replace existing volatile context at its position
+			const updated = [...messages];
+			updated[existingIndex] = volatileMessage;
+			this.agent.replaceMessages(updated);
+		} else {
+			// Append if none exists
+			this.agent.appendMessage(volatileMessage);
+		}
+	}
+
+	/**
+	 * Find and replace an existing untrusted-mcp-server-instructions message, or append if none exists.
+	 * This keeps the message at a stable position in the history for prompt cache consistency.
+	 */
+	#injectOrReplaceUntrustedMcpServerInstructions(mcpMessage: CustomMessage): void {
+		const messages = this.agent.state.messages;
+		const existingIndex = messages.findIndex(
+			message => message.role === "custom" && message.customType === "untrusted-mcp-server-instructions",
+		);
+		if (existingIndex !== -1) {
+			// Replace existing MCP instructions at its position
+			const updated = [...messages];
+			updated[existingIndex] = mcpMessage;
+			this.agent.replaceMessages(updated);
+		} else {
+			// Append if none exists
+			this.agent.appendMessage(mcpMessage);
+		}
 	}
 
 	#appendCustomMessageEntry<T = unknown>(
@@ -13990,6 +14043,15 @@ export class AgentSession {
 
 			this.#removeEphemeralCustomMessages();
 
+			// Inject volatile context into agent state for prompt cache consistency.
+			// This ensures the volatile context stays at a stable position across turns.
+			const volatileProjectContextMessage = await this.#buildVolatileProjectContextMessage();
+			this.#injectOrReplaceVolatileProjectContext(volatileProjectContextMessage);
+			const untrustedMcpServerInstructionsMessage = this.#buildUntrustedMcpServerInstructionsMessage();
+			if (untrustedMcpServerInstructionsMessage) {
+				this.#injectOrReplaceUntrustedMcpServerInstructions(untrustedMcpServerInstructionsMessage);
+			}
+
 			// Check if we need to compact before sending (catches aborted responses)
 			const lastAssistant = this.#findLastAssistantMessage();
 			if (lastAssistant && !options?.skipCompactionCheck) {
@@ -14159,14 +14221,13 @@ export class AgentSession {
 				if (planModeMessage) {
 					messages.push(planModeMessage);
 				}
-				const goalModeMessage = this.#buildAutomaticGoalModeMessage();
+				const goalModeMessage = await this.#buildAutomaticGoalModeMessage();
 				if (goalModeMessage) {
 					messages.push(goalModeMessage);
 				}
-				const volatileProjectContextMessage = await this.#buildVolatileProjectContextMessage();
-				messages.push(volatileProjectContextMessage);
-				const untrustedMcpServerInstructionsMessage = this.#buildUntrustedMcpServerInstructionsMessage();
-				if (untrustedMcpServerInstructionsMessage) messages.push(untrustedMcpServerInstructionsMessage);
+				// Note: volatile-project-context and untrusted-mcp-server-instructions are
+				// injected into the agent state (not the attempt messages) for prompt cache
+				// consistency. They stay at a stable position in the conversation.
 
 				// Roster: one Phase A claim, revalidated and reused on every attempt;
 				// a superseded claim releases and the prompt proceeds without it.
@@ -14328,7 +14389,6 @@ export class AgentSession {
 				return;
 			throw error;
 		} finally {
-			this.#removeEphemeralCustomMessages();
 			if (rosterClaim) {
 				this.agent.replaceMessages(
 					this.agent.state.messages.filter(
